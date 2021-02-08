@@ -1,0 +1,317 @@
+---
+title: "GRM Final Project"
+author: "Connor Putnam"
+date: "11/14/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(ggthemes)
+library(scales)
+```
+
+# Question: What factros lead to the amount of bombs dropped being mission in WW2?
+
+```{r}
+ww2 <- read.csv("operations.csv")
+
+#variables of interest 
+ww2 <- ww2 %>%
+  dplyr::select(Mission.ID, Mission.Date, Theater.of.Operations, Country, Target.Country, Target.City, 
+         Target.Industry, Target.Type, Altitude..Hundreds.of.Feet., Target.Priority, 
+         High.Explosives.Weight..Tons., Total.Weight..Tons., Attacking.Aircraft, Bombing.Aircraft) %>%
+  mutate_all(na_if, "")
+
+#Then going to see what variables have alot of missing values
+ww2 %>%
+  summarise_all(funs(sum(is.na(.))))
+```
+
+```{r}
+naniar::gg_miss_var(ww2)
+```
+
+
+```{r}
+ww2 <- ww2 %>%
+  dplyr::select(Mission.ID, Mission.Date, Theater.of.Operations, Target.Country, Country, Target.Type, Total.Weight..Tons., Target.Industry, Altitude..Hundreds.of.Feet., Attacking.Aircraft, Bombing.Aircraft)
+ww2 <- ww2 %>%
+  drop_na(Total.Weight..Tons.) %>% #This will be my explainitory variable, so no missing 
+  drop_na(Theater.of.Operations) %>% # no way to impute this
+  drop_na(Country) %>%
+  drop_na(Target.Type) %>%
+  drop_na(Target.Industry) %>%
+  group_by(Target.Industry) %>%
+  mutate(Altitude..Hundreds.of.Feet. = 
+           ifelse(is.na(Altitude..Hundreds.of.Feet.), mean(Altitude..Hundreds.of.Feet., na.rm = TRUE), 
+                  Altitude..Hundreds.of.Feet.)) %>%
+  mutate(Attacking.Aircraft = 
+           ifelse(is.na(Attacking.Aircraft), mean(Attacking.Aircraft, na.rm = TRUE),
+                  Attacking.Aircraft)) %>%
+  mutate(Bombing.Aircraft = 
+           ifelse(is.na(Bombing.Aircraft), mean(Bombing.Aircraft, na.rm = TRUE),
+                  Bombing.Aircraft)) %>%
+  drop_na(Altitude..Hundreds.of.Feet.) %>%
+  drop_na(Attacking.Aircraft) %>%
+  drop_na(Target.Country)
+ww2 <- ww2 %>%
+  rename(Date = Mission.Date,
+         Theater = Theater.of.Operations,
+         Target_Country = Target.Country,
+         Target_Type = Target.Type,
+         Total_Weight = Total.Weight..Tons.,
+         Industry = Target.Industry,
+         Altitude = Altitude..Hundreds.of.Feet.,
+         Attacking_Aircraft = Attacking.Aircraft,
+         Bombing_Aircraft = Bombing.Aircraft) 
+ww2 <- ww2 %>%
+  mutate(Total_Weight = round(Total_Weight)) %>%
+  mutate_at(vars(Total_Weight), as.integer) %>%
+  mutate(Date = as.Date(Date, format = "%m/%d/%Y")) %>%
+  mutate(System_Time = as.numeric(as.POSIXct((Date)))) %>%
+  mutate(Alliance = if_else(grepl("AUSTRIA", Target_Country), "Axis",
+                          if_else(grepl("GERMANY", Target_Country), "Axis",
+                          if_else(grepl("BULGARIA", Target_Country), "Axis",
+                          if_else(grepl("SLOVAKIA", Target_Country), "Axis",
+                          if_else(grepl("HUNGARY", Target_Country), "Axis",
+                          if_else(grepl("ROMANIA", Target_Country), "Axis", 
+                          if_else(grepl("BULGARIA", Target_Country), "Axis",
+                          if_else(grepl("CROATIA", Target_Country), "Axis",
+                          if_else(grepl("IRAQ", Target_Country), "Axis",
+                          if_else(grepl("ITALY", Target_Country), "Axis",
+                          if_else(grepl("FINLAND", Target_Country), "Axis", 
+                          if_else(grepl("THAILAND", Target_Country), "Axis",
+                          if_else(grepl("CROATIA", Target_Country), "Axis", "Non-Axis"))))))))))))))
+ww2
+```
+
+
+
+```{r}
+ww2 <- ww2 %>% 
+  mutate(Industry_Type = if_else(grepl("CITIES TOWNS AND URBAN AREAS", 
+                                       Industry), "City", "Non-City")) %>%
+  dplyr::select(-Industry, -Target_Type)
+```
+
+```{r}
+formattable::formattable(ww2 %>% head())
+```
+
+# EDA
+
+```{r}
+ggplot(ww2, aes(reorder(Target_Country, Total_Weight), 
+                Total_Weight, fill = Alliance)) +
+  geom_bar(stat = "identity") +
+  scale_y_continuous(labels = comma) +
+  theme_hc() +
+  theme(axis.text.x = element_text(angle = 45, hjust=1, size = 7)) +
+  labs(title = "Amount of Bombs Dropped During World War Two") +
+  xlab("Country Bombed") +
+  ylab("Total Weight of Bombs Dropped")
+  #ggtitle("Bombs", size = .5)
+ 
+ggplot(ww2, aes(Alliance, Total_Weight, fill = Alliance))  +
+  geom_bar(stat = "identity")
+
+ggplot(ww2, aes(Industry_Type, Total_Weight, fill = Industry_Type))  +
+  geom_bar(stat = "identity") +
+  theme_hc() +
+  scale_y_continuous(labels = comma) +
+  labs(title = "Bombed Dropped by Target Type") +
+  xlab("Target Type") +
+  ylab("Total Weight of Bombs Dropped")
+```
+
+
+
+library(MASS)
+fitdistr(ww2$Total_Weight, "negative binomial")
+
+negbin_sim <- reshape2::melt(ww2$Total_Weight)
+negbin_sim <- as.data.frame(table(negbin_sim))
+
+ggplot(ww2, aes(Total_Weight)) +
+  geom_histogram(bins = 100, color = "black", fill = "steelblue") +
+  theme_hc() +
+  xlab("Total Bombing Weight per Mission") +
+  ylab("Count") +
+  ggtitle("Distribution of Counts")
+
+
+
+first_model <- glm(Total_Weight ~ Attacking_Aircraft, data = ww2, 
+                  family = poisson(link = "log"))
+summary(first_model)
+
+
+Sense there is a tone of over dispersion I will try the negative binomial
+
+
+neg_model <- glm.nb(Total_Weight + 1 ~ log(Attacking_Aircraft) + 
+                      log(Bombing_Aircraft) + Altitude + System_Time + Theater + Alliance + Industry_Type, data = ww2)
+summary(neg_model)
+AIC(neg_model)
+
+
+https://www.youtube.com/watch?v=vN5cNN2-HWE
+
+
+QQ_nb_war <- qplot(sample = .stdresid, data = neg_model, stat = "qq") + 
+  geom_abline() +
+  ggtitle("QQ Plot")
+
+Res_nb_war <- qplot(.fitted, .resid, data = neg_model) +
+  geom_hline(yintercept = 0) +
+  geom_smooth(se = FALSE) +
+  ggtitle("Residual Plot")
+ 
+gridExtra::grid.arrange(QQ_nb_war, Res_nb_war, ncol =2)
+
+
+```{r}
+#boxcox(neg_model, lambda = seq(-1, 1))
+```
+
+```{r}
+min(ww2$Total_Weight)
+```
+
+
+# Overview
+
+The goal of this project was to model the amount of bombs drops on a given mission during World War 2. When setting out to do this project I wanted to implimentent generalized linear models as per the assignemnt requirements, but I also what to explore between generalized linear models and big data. In order to get my toes wet with this I decided abone this this Arieal Bombing Dataset that can be found at https://www.kaggle.com/usaf/world-war-ii. The dataset contains 178,281 observations, each indicating a single bombing mission between the May 15, 1940 and May 2, 1945. This data only covers Allied operations an thus this is why the records begin approximately eight months after the German advancement into Poland. With final observations coming a few days before the German surrender. The data set also contains 46 variables. 
+
+# Question of Interest: 
+
+### What factors lead to the amount of bombs dropped on a mission in WW2?
+
+I will set the response variable to be the Total Weight of bombs dropped during a single mission. Some of the variables are not relevant to answering this question so I will discard those. Additionally, many of the variables are categorial variables and have many different factor levels. In order for my analysis more interpretable I might have to perform some data cleaning and categorization. As with many large data sets there was alot of missing variable, this can also be explained in part becasue this is historical data during a time of war. The plot below shows that many of the variables have too many missing values and thus will have to be dropped from potential analysis.
+
+```{r echo=FALSE}
+ww2 <- read.csv("operations.csv")
+naniar::gg_miss_var(ww2) + ggtitle("Number of Missing Variables")
+```
+
+After addressing this the next step was to impute and as well decide what variable to keep for analaysis. Based on the ability to impute as well as the relevence to myt quesiton of interest I decided on the following varibales for analysis. The table below list out variables being used after data wrangling/cleaning as well the first six obervations for those values.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ww2 <- ww2 %>%
+  dplyr::select(Mission.ID, Mission.Date, Theater.of.Operations, Country, Target.Country, Target.City, 
+         Target.Industry, Target.Type, Altitude..Hundreds.of.Feet., Target.Priority, 
+         High.Explosives.Weight..Tons., Total.Weight..Tons., Attacking.Aircraft, Bombing.Aircraft) %>%
+  mutate_all(na_if, "")
+
+ww2 <- ww2 %>%
+  dplyr::select(Mission.ID, Mission.Date, Theater.of.Operations, Target.Country, Country, Target.Type, Total.Weight..Tons., Target.Industry, Altitude..Hundreds.of.Feet., Attacking.Aircraft, Bombing.Aircraft)
+ww2 <- ww2 %>%
+  drop_na(Total.Weight..Tons.) %>% #This will be my explainitory variable, so no missing 
+  drop_na(Theater.of.Operations) %>% # no way to impute this
+  drop_na(Country) %>%
+  drop_na(Target.Type) %>%
+  drop_na(Target.Industry) %>%
+  group_by(Target.Industry) %>%
+  mutate(Altitude..Hundreds.of.Feet. = 
+           ifelse(is.na(Altitude..Hundreds.of.Feet.), mean(Altitude..Hundreds.of.Feet., na.rm = TRUE), 
+                  Altitude..Hundreds.of.Feet.)) %>%
+  mutate(Attacking.Aircraft = 
+           ifelse(is.na(Attacking.Aircraft), mean(Attacking.Aircraft, na.rm = TRUE),
+                  Attacking.Aircraft)) %>%
+  mutate(Bombing.Aircraft = 
+           ifelse(is.na(Bombing.Aircraft), mean(Bombing.Aircraft, na.rm = TRUE),
+                  Bombing.Aircraft)) %>%
+  drop_na(Altitude..Hundreds.of.Feet.) %>%
+  drop_na(Attacking.Aircraft) %>%
+  drop_na(Target.Country)
+ww2 <- ww2 %>%
+  rename(Date = Mission.Date,
+         Theater = Theater.of.Operations,
+         Target_Country = Target.Country,
+         Target_Type = Target.Type,
+         Total_Weight = Total.Weight..Tons.,
+         Industry = Target.Industry,
+         Altitude = Altitude..Hundreds.of.Feet.,
+         Attacking_Aircraft = Attacking.Aircraft,
+         Bombing_Aircraft = Bombing.Aircraft) 
+ww2 <- ww2 %>%
+  mutate(Total_Weight = round(Total_Weight)) %>%
+  mutate_at(vars(Total_Weight), as.integer) %>%
+  mutate(Date = as.Date(Date, format = "%m/%d/%Y")) %>%
+  mutate(System_Time = as.numeric(as.POSIXct((Date)))) %>%
+  mutate(Alliance = if_else(grepl("AUSTRIA", Target_Country), "Axis",
+                          if_else(grepl("GERMANY", Target_Country), "Axis",
+                          if_else(grepl("BULGARIA", Target_Country), "Axis",
+                          if_else(grepl("SLOVAKIA", Target_Country), "Axis",
+                          if_else(grepl("HUNGARY", Target_Country), "Axis",
+                          if_else(grepl("ROMANIA", Target_Country), "Axis", 
+                          if_else(grepl("BULGARIA", Target_Country), "Axis",
+                          if_else(grepl("CROATIA", Target_Country), "Axis",
+                          if_else(grepl("IRAQ", Target_Country), "Axis",
+                          if_else(grepl("ITALY", Target_Country), "Axis",
+                          if_else(grepl("FINLAND", Target_Country), "Axis", 
+                          if_else(grepl("THAILAND", Target_Country), "Axis",
+                          if_else(grepl("CROATIA", Target_Country), "Axis", "Non-Axis"))))))))))))))
+ww2 <- ww2 %>% 
+  mutate(Industry_Type = if_else(grepl("CITIES TOWNS AND URBAN AREAS", 
+                                       Industry), "City", "Non-City")) %>%
+  dplyr::select(-Industry, -Target_Type)
+```
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#formattable::formattable(ww2 %>% head())
+kableExtra::kable(head(ww2)) %>% kableExtra::kable_styling(latex_options="scale_down")
+```
+
+## Poisson Regression
+
+After looking at the counts of bomb droped I devided to process with the following Poisson
+regression,
+
+`glm(Total_Weight ~ Attacking_Aircraft + Bombing_Aircraft + Altitude + System_Time + Theater + Alliance, data = ww2, family = poisson(link = "log"))`
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+first_model_report <- glm(Total_Weight ~ Attacking_Aircraft + 
+                      Bombing_Aircraft + Altitude + System_Time + Theater
+                        + Alliance, data = ww2, 
+                        family = poisson(link = "log"))
+summary(first_model_report)
+```
+
+This resulted in some interesting findings regarding signifigance but ulitmately cannot be used becasue the deviance is clocking in at `r summary(first_model_report)$deviance` on `r summary(first_model_report)$df[2]` degrees of freedom. So there is clearly an issue with overdispersion
+at play. The next time to is to take the quasi poisson but that also resulted in a similiar overdisprerion issue. Addtioanlly even with vearious transformations should as inverse and logarithmic is there was no meaningful improvement in this model. 
+
+## Negative Binomial
+
+Sense both the Poisson and the Quasi-Poisson reuslted in over disperion I decided to try my luck on a negative binomial model instead. The first negative binomial model I choose was the following:
+
+`glm.nb(Total_Weight ~ Attacking_Aircraft + Bombing_Aircraft + Altitude + System_Time + Theater + Alliance + Industry_Type, data = ww2)`
+```{r message=FALSE, warning=FALSE, include=FALSE}
+neg_model_report <- MASS::glm.nb(Total_Weight ~ Attacking_Aircraft + 
+                      Bombing_Aircraft + Altitude + System_Time + Theater + Alliance + Industry_Type, data = ww2)
+summary(neg_model_report)
+```
+
+
+This resulted in a much better deviance value of `r summary(neg_model_report)$deviance` on `r summary(neg_model_report)$df[2]` degrees of freedom. This level off overdispersion is much more managebale, esspeically considering the size of the data. The overdispersion ration sits at approximaley `r round((summary(neg_model_report)$deviance) / (summary(neg_model_report)$df[2]), 2)` Now the next step was to to see if I could improve upon this in terms of AIC values and even less overdisperison.
+
+
+
+
+```{r}
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

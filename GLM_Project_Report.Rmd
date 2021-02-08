@@ -1,0 +1,186 @@
+---
+title: "GLM Project Report"
+author: "Connor Putnam"
+date: "12/6/2020"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(dplyr)
+library(ggthemes)
+library(scales)
+library(kableExtra)
+
+kable_summary <- function(summary_varibale, background_color, color_color, sig_level, styling) {
+options(scipen = 999)
+summary_varibale <- round(summary(summary_varibale)$coefficients , 4)
+summary_varibale <- as.data.frame(summary_varibale)
+kable(summary_varibale) %>% 
+  kable_styling(latex_options = styling) %>%
+  row_spec(which(summary_varibale[4] < sig_level), bold = T, color = background_color, background = color_color)
+}
+```
+
+# Overview
+
+The goal of this project was to model the amount of bombs drops on a given mission during World War 2. When setting out to do this project I wanted to implimentent generalized linear models as per the assignemnt requirements, but I also what to explore between generalized linear models and big data. In order to get my toes wet with this I decided abone this this Arieal Bombing Dataset that can be found at https://www.kaggle.com/usaf/world-war-ii. The dataset contains 178,281 observations, each indicating a single bombing mission between the May 15, 1940 and May 2, 1945. This data only covers Allied operations an thus this is why the records begin approximately eight months after the German advancement into Poland. With final observations coming a few days before the German surrender. The data set also contains 46 variables. 
+
+# Question of Interest: 
+
+### What factors lead to the amount of bombs dropped on a mission in WW2?
+
+I will set the response variable to be the Total Weight of bombs dropped during a single mission. Some of the variables are not relevant to answering this question so I will discard those. Additionally, many of the variables are categorial variables and have many different factor levels. In order for my analysis more interpretable I might have to perform some data cleaning and categorization. As with many large data sets there was alot of missing variable, this can also be explained in part becasue this is historical data during a time of war. The plot below shows that many of the variables have too many missing values and thus will have to be dropped from potential analysis.
+
+```{r echo=FALSE}
+ww2 <- read.csv("operations.csv")
+naniar::gg_miss_var(ww2) + 
+  ggtitle("Number of Missing Variables") +
+  theme(axis.text.y = element_text(size = 6))
+
+```
+
+After addressing this the next step was to impute and as well decide what variable to keep for analaysis. Based on the ability to impute as well as the relevence to myt quesiton of interest I decided on the following varibales for analysis. The table below list out variables being used after data wrangling/cleaning as well the first six obervations for those values.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ww2 <- ww2 %>%
+  dplyr::select(Mission.ID, Mission.Date, Theater.of.Operations, Country, Target.Country, Target.City, 
+         Target.Industry, Target.Type, Altitude..Hundreds.of.Feet., Target.Priority, 
+         High.Explosives.Weight..Tons., Total.Weight..Tons., Attacking.Aircraft, Bombing.Aircraft) %>%
+  mutate_all(na_if, "")
+
+ww2 <- ww2 %>%
+  dplyr::select(Mission.ID, Mission.Date, Theater.of.Operations, Target.Country, Country, Target.Type, Total.Weight..Tons., Target.Industry, Altitude..Hundreds.of.Feet., Attacking.Aircraft, Bombing.Aircraft)
+ww2 <- ww2 %>%
+  drop_na(Total.Weight..Tons.) %>% #This will be my explainitory variable, so no missing 
+  drop_na(Theater.of.Operations) %>% # no way to impute this
+  drop_na(Country) %>%
+  drop_na(Target.Type) %>%
+  drop_na(Target.Industry) %>%
+  group_by(Target.Industry) %>%
+  mutate(Altitude..Hundreds.of.Feet. = 
+           ifelse(is.na(Altitude..Hundreds.of.Feet.), mean(Altitude..Hundreds.of.Feet., na.rm = TRUE), 
+                  Altitude..Hundreds.of.Feet.)) %>%
+  mutate(Attacking.Aircraft = 
+           ifelse(is.na(Attacking.Aircraft), mean(Attacking.Aircraft, na.rm = TRUE),
+                  Attacking.Aircraft)) %>%
+  mutate(Bombing.Aircraft = 
+           ifelse(is.na(Bombing.Aircraft), mean(Bombing.Aircraft, na.rm = TRUE),
+                  Bombing.Aircraft)) %>%
+  drop_na(Altitude..Hundreds.of.Feet.) %>%
+  drop_na(Attacking.Aircraft) %>%
+  drop_na(Target.Country)
+ww2 <- ww2 %>%
+  rename(Date = Mission.Date,
+         Theater = Theater.of.Operations,
+         Target_Country = Target.Country,
+         Target_Type = Target.Type,
+         Total_Weight = Total.Weight..Tons.,
+         Industry = Target.Industry,
+         Altitude = Altitude..Hundreds.of.Feet.,
+         Attacking_Aircraft = Attacking.Aircraft,
+         Bombing_Aircraft = Bombing.Aircraft) 
+ww2 <- ww2 %>%
+  mutate(Total_Weight = round(Total_Weight)) %>%
+  mutate_at(vars(Total_Weight), as.integer) %>%
+  mutate(Date = as.Date(Date, format = "%m/%d/%Y")) %>%
+  mutate(System_Time = as.numeric(as.POSIXct((Date)))) %>%
+  mutate(Alliance = if_else(grepl("AUSTRIA", Target_Country), "Axis",
+                          if_else(grepl("GERMANY", Target_Country), "Axis",
+                          if_else(grepl("BULGARIA", Target_Country), "Axis",
+                          if_else(grepl("SLOVAKIA", Target_Country), "Axis",
+                          if_else(grepl("HUNGARY", Target_Country), "Axis",
+                          if_else(grepl("ROMANIA", Target_Country), "Axis", 
+                          if_else(grepl("BULGARIA", Target_Country), "Axis",
+                          if_else(grepl("CROATIA", Target_Country), "Axis",
+                          if_else(grepl("IRAQ", Target_Country), "Axis",
+                          if_else(grepl("ITALY", Target_Country), "Axis",
+                          if_else(grepl("FINLAND", Target_Country), "Axis", 
+                          if_else(grepl("THAILAND", Target_Country), "Axis",
+                          if_else(grepl("CROATIA", Target_Country), "Axis", "Non-Axis"))))))))))))))
+ww2 <- ww2 %>% 
+  mutate(Industry_Type = if_else(grepl("CITIES TOWNS AND URBAN AREAS", 
+                                       Industry), "City", "Non-City")) %>%
+  dplyr::select(-Industry, -Target_Type)
+```
+```{r echo=FALSE, message=TRUE, warning=FALSE}
+#formattable::formattable(ww2 %>% head())
+kable(head(ww2[1:6])) %>% kable_styling(latex_options = c("striped", "scale_down"))
+kable(head(ww2[7:13])) %>% kable_styling(latex_options = c("striped", "scale_down"))
+```
+
+```{r echo=FALSE}
+Variable_Names <- c(colnames(ww2)[9], colnames(ww2)[10], colnames(ww2)[8], 
+           colnames(ww2)[11], colnames(ww2)[4], colnames(ww2)[12], 
+           colnames(ww2)[13])
+Definition <- c("Number of Attacking Aircraft(Non-Bombers)", "Number of Bombing Aircraft", "How high the plans flew on a given mission, in hundreds of fee", "Date in which the mission occured converted into computer system time", "Theater of warfare", "Clasifies a county's Alliance as either Axis(Germany, Italy, etc) or Non Axis(Allies:USA, Britian, USSR, etc", "Clasifies bombing targets as either city targets or industrial/warfare targets" )
+
+def_name <- as.data.frame(cbind(Variable_Names, Definition))
+kable(def_name) %>% kable_styling(latex_options = c("striped", "scale_down"))
+```
+
+## Poisson Regression
+
+After looking at the counts of bomb droped I devided to process with the following Poisson
+regression,
+
+`glm(Total_Weight ~ Attacking_Aircraft + Bombing_Aircraft + Altitude + System_Time + Theater + Alliance, data = ww2, family = poisson(link = "log"))`
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+options(scipen = 999)
+first_model_report <- glm(Total_Weight ~ Attacking_Aircraft + 
+                      Bombing_Aircraft + Altitude + System_Time + Theater
+                        + Alliance, data = ww2, 
+                        family = poisson(link = "log"))
+kable_summary(first_model_report, "white", "gray", 0.05, "basic")
+```
+
+This resulted in some interesting findings regarding signifigance but ulitmately cannot be used becasue the deviance is clocking in at `r summary(first_model_report)$deviance` on `r summary(first_model_report)$df[2]` degrees of freedom. So there is clearly an issue with overdispersion
+at play. The next time to is to take the quasi poisson but that also resulted in a similiar overdisprerion issue. Addtioanlly even with vearious transformations should as inverse and logarithmic is there was no meaningful improvement in this model. 
+
+## Negative Binomial
+
+Sense both the Poisson and the Quasi-Poisson reuslted in over disperion I decided to try my luck on a negative binomial model instead. The first negative binomial model I choose was the following:
+
+`glm.nb(Total_Weight ~ Attacking_Aircraft + Bombing_Aircraft + Altitude + System_Time + Theater + Alliance + Industry_Type, data = ww2)`
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+neg_model_report <- MASS::glm.nb(Total_Weight ~ Attacking_Aircraft + 
+                      Bombing_Aircraft + Altitude + System_Time + Theater + Alliance + Industry_Type, data = ww2)
+kable_summary(neg_model_report, "white", "gray", 0.05, "basic")
+```
+
+
+This resulted in a much better deviance value of `r round(summary(neg_model_report)$deviance, 2)` on `r summary(neg_model_report)$df[2]` degrees of freedom. This level off overdispersion is much more managebale, esspeically considering the size of the data. The overdispersion ration sits at approximaley `r round((summary(neg_model_report)$deviance) / (summary(neg_model_report)$df[2]), 2)` Now the next step was to to see if I could improve upon this in terms of AIC values and even less overdisperison.
+
+The first proposed negative binomial model had an AIC value of `r round(AIC(neg_model_report), 2)`. I was able to come some imporvement based by trying out difference transformations. The best I was able to get was the following model:
+
+`glm.nb(Total_Weight + 1 ~ log(Attacking_Aircraft) + log(Bombing_Aircraft) + Altitude + System_Time + Theater + Alliance + Industry_Type, data = ww2)`
+```{r echo=FALSE}
+neg_model_best <- MASS::glm.nb(Total_Weight + 1 ~ log(Attacking_Aircraft) + 
+                      log(Bombing_Aircraft) + Altitude + System_Time + Theater + Alliance + Industry_Type, data = ww2)
+kable_summary(neg_model_best, "white", "gray", 0.05, "basic")
+```
+
+This dropped the AIC value down by `r round((AIC(neg_model_report) - AIC(neg_model_best)), 2)` to `r round(AIC(neg_model_best),2)`. Additionly the devieince to degrees of freedom ratio was slightly reduced from `r round((summary(neg_model_report)$deviance) / (summary(neg_model_report)$df[2]), 2)` to `r round((summary(neg_model_best)$deviance) / (summary(neg_model_best)$df[2]), 2)`. This transfomraiton is notworthy  but the improvement is minimal and might just over complicate interation of the model for little reward in terms of predictability.
+
+## Conclusions
+
+After performing this analysis I concluded that the best model was not a Poisson but instead a negative binomial. Through tranfomations I was also able to find a model that made modest improved both in terms of AIC and the overdispersion ratio. THe findings are that the Altitude the planes were flying at, when the bombing mission took place, the targets Alliance, and the industry type, were all very signifigant in terminaiting the amount of bombs dropped. The `System_time` variable signigicant was not surprising to me becasue I was aware before going into this that more bombs were dropped by the US and Great Britian later on in the war. Similiar a planes altiude is a huge determinate on how much wait it can hold, so that was not too surprising. I was surpried by the level of signigivan tin bothe `Alliance` and `Industry_Type`. I figure they would be improtant in predicting but not this important, my prior was that during world war two the lines became pretty blurred between what was an enemy target and what was a civilian target. THe `Theater`, `Bombing_Aircraft` and `Attacking_Aircraft` varibales were not signigiant. The `Theater` variables insigfigance did not surprised me much bit the other two did. I was expecting the ampoung of aircraft involved during a mission to be highly predictive in terms od the amount of bombs dropped during a mission. But this does not seem to be true.
+
+Overall I found the findings to be interesting and I learned alot along the way in terms of applying GLM models to big data set. Hope the reader finds this report interesting as well. Thank you!
+
+
+
+
+
+
+
+
+
+
+
