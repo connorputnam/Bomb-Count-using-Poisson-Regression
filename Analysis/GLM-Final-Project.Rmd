@@ -16,7 +16,7 @@ library(scales)
 # Question: What factros lead to the amount of bombs dropped being mission in WW2?
 
 ```{r}
-ww2 <- read.csv("operations.csv")
+ww2 <- read_csv("operations.csv")
 
 #variables of interest 
 ww2 <- ww2 %>%
@@ -126,52 +126,6 @@ ggplot(ww2, aes(Industry_Type, Total_Weight, fill = Industry_Type))  +
   xlab("Target Type") +
   ylab("Total Weight of Bombs Dropped")
 ```
-
-
-
-library(MASS)
-fitdistr(ww2$Total_Weight, "negative binomial")
-
-negbin_sim <- reshape2::melt(ww2$Total_Weight)
-negbin_sim <- as.data.frame(table(negbin_sim))
-
-ggplot(ww2, aes(Total_Weight)) +
-  geom_histogram(bins = 100, color = "black", fill = "steelblue") +
-  theme_hc() +
-  xlab("Total Bombing Weight per Mission") +
-  ylab("Count") +
-  ggtitle("Distribution of Counts")
-
-
-
-first_model <- glm(Total_Weight ~ Attacking_Aircraft, data = ww2, 
-                  family = poisson(link = "log"))
-summary(first_model)
-
-
-Sense there is a tone of over dispersion I will try the negative binomial
-
-
-neg_model <- glm.nb(Total_Weight + 1 ~ log(Attacking_Aircraft) + 
-                      log(Bombing_Aircraft) + Altitude + System_Time + Theater + Alliance + Industry_Type, data = ww2)
-summary(neg_model)
-AIC(neg_model)
-
-
-https://www.youtube.com/watch?v=vN5cNN2-HWE
-
-
-QQ_nb_war <- qplot(sample = .stdresid, data = neg_model, stat = "qq") + 
-  geom_abline() +
-  ggtitle("QQ Plot")
-
-Res_nb_war <- qplot(.fitted, .resid, data = neg_model) +
-  geom_hline(yintercept = 0) +
-  geom_smooth(se = FALSE) +
-  ggtitle("Residual Plot")
- 
-gridExtra::grid.arrange(QQ_nb_war, Res_nb_war, ncol =2)
-
 
 ```{r}
 #boxcox(neg_model, lambda = seq(-1, 1))
